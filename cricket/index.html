@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>Ultimate Cricket Game – Mobile Ready 🏏</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 10px;
+      text-align: center;
+      background: #022c22;
+      color: white;
+      font-family: Arial, sans-serif;
+      touch-action: none; /* helps prevent double-tap zoom / scroll issues */
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    h2 {
+      margin: 10px 0;
+      font-size: 1.6rem;
+    }
+    canvas {
+      border: 4px solid #fff;
+      border-radius: 10px;
+      background: #16a34a;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+      display: block;
+      margin: 15px auto;
+      max-width: 100%;
+      touch-action: none;
+    }
+    #controls {
+      margin: 15px 0;
+    }
+    button {
+      margin: 6px;
+      padding: 12px 24px;
+      font-size: 1.1rem;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      background: #eab308;
+      color: #111;
+      font-weight: bold;
+    }
+    button:hover { background: #facc15; }
+    #ui {
+      font-size: 1.4rem;
+      margin: 10px 0;
+    }
+    #message {
+      font-size: 1.5rem;
+      font-weight: bold;
+      min-height: 35px;
+      color: #fbbf24;
+    }
+    @media (max-width: 600px) {
+      h2 { font-size: 1.4rem; }
+      button { padding: 10px 20px; font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<h2>🏏 Ultimate Cricket Game</h2>
+
+<div id="controls">
+  <button onclick="startGame()">▶️ Play</button>
+  <button onclick="restartGame()">🔄 Restart</button>
+  <button onclick="endGame()">❌ End</button>
+</div>
+
+<div id="ui">
+  Score: <span id="score">0</span>  |  Wickets: <span id="wickets">3</span>
+</div>
+<div id="message"></div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const messageEl = document.getElementById("message");
+
+// Responsive canvas sizing
+function resizeCanvas() {
+  const aspect = 4 / 5; // taller than wide for cricket pitch feel
+  let w = Math.min(window.innerWidth - 40, 500);
+  let h = w / aspect;
+  if (h > window.innerHeight * 0.65) {
+    h = window.innerHeight * 0.65;
+    w = h * aspect;
+  }
+  canvas.width = w;
+  canvas.height = h;
+  // Update game positions based on new size
+  bat.x = canvas.width / 2 - 40;
+  bat.y = canvas.height - 100;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Sounds
+const hitSound  = new Audio("https://www.soundjay.com/buttons/sounds/button-16.mp3");
+const missSound = new Audio("https://www.soundjay.com/misc/sounds/fail-buzzer-02.mp3");
+const outSound  = new Audio("https://www.soundjay.com/misc/sounds/fail-buzzer-02.mp3");
+
+// Images (small size → fast load)
+const batsmanImg = new Image(); batsmanImg.src = "https://i.imgur.com/6X4Z6bH.png";
+const bowlerImg  = new Image(); bowlerImg.src  = "https://i.imgur.com/8Qf6G7D.png";
+
+// Game state
+let score = 0, wickets = 3;
+let gameRunning = false, gameOver = false;
+let bat = { x: 0, y: 0, angle: 0, swinging: false };
+let ball = { x: 0, y: 60, speed: 3.5, size: 10 };
+let canHit = false;
+let lastHitTime = 0;
+
+// ── Controls (Keyboard + Touch) ────────────────────────────────
+const keys = {};
+
+document.addEventListener("keydown", e => {
+  if (!gameRunning || gameOver) return;
+  keys[e.code] = true;
+  if (canHit && Date.now() - lastHitTime > 500) {
+    if (e.code === "ArrowLeft")  hitBall("LEFT");
+    if (e.code === "ArrowRight") hitBall("RIGHT");
+    if (e.code === "Space")      hitBall("STRAIGHT");
+  }
+});
+
+document.addEventListener("keyup",   e => keys[e.code] = false);
+
+// Touch controls ─ swipe on lower half
+let touchStartX = 0, touchStartY = 0;
+
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  if (!gameRunning || gameOver) return;
+  const touch = e.touches[0];
+  touchStartX = touch.clientX;
+  touchStartY = touch.clientY;
+});
+
+canvas.addEventListener("touchend", e => {
+  e.preventDefault();
+  if (!gameRunning || gameOver || !canHit || Date.now() - lastHitTime < 500) return;
+
+  const touch = e.changedTouches[0];
+  const dx = touch.clientX - touchStartX;
+  const dy = touch.clientY - touchStartY;
+
+  // Only consider swipes on lower ~60% of screen
+  if (touchStartY > canvas.getBoundingClientRect().top + canvas.height * 0.4) {
+    if (Math.abs(dx) > 40 || Math.abs(dy) > 30) {
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (dx < 0) hitBall("LEFT");
+        else        hitBall("RIGHT");
+      } else if (dy < -30) {
+        hitBall("STRAIGHT");
+      }
+    }
+  }
+});
+
+// ── Game Logic ─────────────────────────────────────────────────
+function startGame() {
+  if (gameRunning) return;
+  score = 0; wickets = 3;
+  gameOver = false; gameRunning = true;
+  ball.speed = 3.2 + Math.random() * 0.8;
+  resetBall();
+  messageEl.textContent = "Swipe ← → ↑ or use keys!";
+  messageEl.style.color = "#22c55e";
+  updateUI();
+}
+
+function restartGame() { startGame(); }
+
+function endGame() {
+  gameRunning = false; gameOver = true;
+  messageEl.textContent = "Game stopped";
+  alert("Game Ended! Score: " + score);
+}
+
+function hitBall(direction) {
+  canHit = false;
+  lastHitTime = Date.now();
+  bat.swinging = true;
+  bat.angle = 0;
+
+  const timingError = Math.abs(ball.y - bat.y);
+  let runs = 0, msg = "";
+
+  if      (timingError < 20) { runs = 6; msg = "SIX! 🚀"; }
+  else if (timingError < 40) { runs = 4; msg = "FOUR! ⚡"; }
+  else if (timingError < 70) { runs = 2; msg = "Double"; }
+  else if (timingError < 110){ runs = 1; msg = "Single"; }
+  else                       { runs = 0; msg = "Miss!"; }
+
+  if (runs > 0) {
+    score += runs;
+    hitSound.currentTime = 0; hitSound.play();
+    messageEl.textContent = `${msg} +${runs}`;
+    messageEl.style.color = runs >= 4 ? "#22c55e" : "#eab308";
+
+    if (direction === "LEFT")  ball.x -= 90;
+    if (direction === "RIGHT") ball.x += 90;
+  } else {
+    missSound.currentTime = 0; missSound.play();
+    messageEl.textContent = "Missed 😓";
+    messageEl.style.color = "#ef4444";
+  }
+
+  updateUI();
+  setTimeout(resetBall, 500);
+}
+
+function loseWicket() {
+  wickets--;
+  outSound.currentTime = 0; outSound.play();
+  messageEl.textContent = "OUT! ☠️";
+  messageEl.style.color = "#dc2626";
+  updateUI();
+
+  if (wickets <= 0) {
+    gameOver = true; gameRunning = false;
+    setTimeout(() => {
+      alert("All Out! Final Score: " + score + "\nGreat effort! 🏏");
+      messageEl.textContent = "Game Over – All Out";
+    }, 400);
+  } else {
+    setTimeout(resetBall, 700);
+  }
+}
+
+function resetBall() {
+  ball.y = 60;
+  ball.x = canvas.width * 0.3 + Math.random() * (canvas.width * 0.4);
+  canHit = false;
+  bat.angle = 0; bat.swinging = false;
+  messageEl.textContent = "";
+}
+
+function updateUI() {
+  document.getElementById("score").innerText = score;
+  document.getElementById("wickets").innerText = wickets;
+}
+
+// ── Draw ───────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Sky + pitch + grass
+  ctx.fillStyle = "#60a5fa"; ctx.fillRect(0, 0, canvas.width, canvas.height * 0.3);
+  ctx.fillStyle = "#c2b280"; ctx.fillRect(canvas.width*0.25, 40, canvas.width*0.5, canvas.height);
+  ctx.fillStyle = "#16a34a"; ctx.fillRect(0, canvas.height*0.3, canvas.width, canvas.height*0.7);
+
+  // Wickets
+  ctx.fillStyle = "#fff";
+  for (let off of [-12, 0, 12]) {
+    ctx.fillRect(canvas.width/2 + off, 80, 6, 35);
+    ctx.fillRect(canvas.width/2 + off, bat.y - 10, 6, 35);
+  }
+
+  if (gameRunning && !gameOver) {
+    // Bowler
+    ctx.drawImage(bowlerImg, canvas.width/2 - 50, 10, 100, 100);
+
+    // Batsman swing
+    ctx.save();
+    ctx.translate(bat.x + 40, bat.y + 50);
+    if (bat.swinging) {
+      bat.angle += 10;
+      if (bat.angle > 75) bat.swinging = false;
+    } else {
+      bat.angle *= 0.78;
+    }
+    ctx.rotate(bat.angle * Math.PI / 180);
+    ctx.drawImage(batsmanImg, -50, -60, 100, 100);
+    ctx.restore();
+
+    // Ball
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.size, 0, Math.PI*2);
+    ctx.fillStyle = "#fefefe"; ctx.fill();
+    ctx.strokeStyle = "#ca8a04"; ctx.lineWidth = 2.5; ctx.stroke();
+
+    ball.y += ball.speed;
+
+    // Hit window
+    if (ball.y > bat.y - 90 && ball.y < bat.y - 15) {
+      if (!canHit) {
+        canHit = true;
+        messageEl.textContent = "NOW!";
+        messageEl.style.color = "#ef4444";
+      }
+    }
+
+    // Missed / out
+    if (ball.y > bat.y + 50) {
+      if (canHit) {
+        messageEl.textContent = "Too late!";
+        messageEl.style.color = "#d97706";
+      } else {
+        loseWicket();
+      }
+      resetBall();
+    }
+  }
+
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+</body>
+</html>
